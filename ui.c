@@ -533,7 +533,10 @@ typedef struct
 	float texCoord[2];
 } UIGLVertex;
 static GLuint ui_vao = 0, ui_vbo = 0;
-void ui_render_text_(UIFont *font, float *x, float *y, const char *text, float *textcolor)
+
+//TODO: text overflow?
+
+bool ui_render_text_(UIFont *font, float *x, float *y, float x_max, const char *text, float *textcolor)
 {
 	glBindTexture(GL_TEXTURE_2D, font->gl_texture);
 
@@ -564,12 +567,18 @@ void ui_render_text_(UIFont *font, float *x, float *y, const char *text, float *
 	glUniform4fv(glGetUniformLocation(ui_ctx.gl_program, "textColor"), 1, textcolor);
 	float w = (float)ui_ctx.width;
 	float h = (float)ui_ctx.height;
+	bool overflow = false;
 	while(*text)
 	{
 		if(*text >= 32 && *text < 128)
 		{
 			stbtt_aligned_quad q;
 			stbtt_GetBakedQuad(font->cdata, 512, 512, *text - 32, x, y, &q, 1); // 1=opengl & d3d10+,0=d3d9
+			if(x_max > 0.f && *x >= x_max)
+			{
+				overflow = true;
+				break;
+			}
 			UIGLVertex vertices[] = { { q.x0, q.y0, q.s0, q.t0 }, { q.x1, q.y0, q.s1, q.t0 },
 									  { q.x0, q.y1, q.s0, q.t1 },
 
@@ -588,6 +597,7 @@ void ui_render_text_(UIFont *font, float *x, float *y, const char *text, float *
 	//glDeleteBuffers(1, &vbo);
 	//glDeleteVertexArrays(1, &vao);
 	CHECK_GL_ERROR();
+	return overflow;
 }
 
 bool ui_clicked()
@@ -681,30 +691,45 @@ void ui_render_element_(UIElement *e)
 		case k_EUIElementTypeButton:
 		case k_EUIElementTypeLabel:
 			content_y += e->content_height;
-			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
+			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
 			break;
 		case k_EUIElementTypeText:
 		{
 			float value_y = content_y;
 			content_y += e->content_height;
-			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
-			ui_render_text_(font, &content_x, &content_y, ": ", props->text_color);
+			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
+			ui_render_text_(font, &content_x, &content_y, 0.f, ": ", props->text_color);
 			if(e->u.text.out_string)
 			{
 				float value_x = content_x;
-				ui_render_text_(font, &content_x, &content_y, e->u.text.out_string, props->text_color);
-				if(ui_ctx.active_text_input == e->u.text.out_string)
+				#if 0
+				float text_width = 0.f;
+				ui_font_measure_text(ui_ctx.default_font,
+									 e->u.text.out_string,
+									 NULL,
+									 &text_width,
+									 NULL);
+#endif
+				if(!ui_render_text_(font,
+									&content_x,
+									&content_y,
+									props->width + e->rect.x,
+									e->u.text.out_string,
+									props->text_color))
 				{
-					if(draw_caret && ui_ctx.caret_pos >= 0 && ui_ctx.caret_pos <= strlen(e->u.text.out_string))
+					if(ui_ctx.active_text_input == e->u.text.out_string)
 					{
-						float caret_x_offset = 0.f;
-						ui_font_measure_text(ui_ctx.default_font,
-											 e->u.text.out_string,
-											 e->u.text.out_string + ui_ctx.caret_pos,
-											 &caret_x_offset,
-											 NULL);
-						caret_x_offset += value_x - 1.f;
-						ui_render_text_(font, &caret_x_offset, &content_y, "|", props->text_color);
+						if(draw_caret && ui_ctx.caret_pos >= 0 && ui_ctx.caret_pos <= strlen(e->u.text.out_string))
+						{
+							float caret_x_offset = 0.f;
+							ui_font_measure_text(ui_ctx.default_font,
+												 e->u.text.out_string,
+												 e->u.text.out_string + ui_ctx.caret_pos,
+												 &caret_x_offset,
+												 NULL);
+							caret_x_offset += value_x - 1.f;
+							ui_render_text_(font, &caret_x_offset, &content_y, 0.f, "|", props->text_color);
+						}
 					}
 				}
 				if(ui_ctx.selection_beg >= 0 && ui_ctx.selection_end <= strlen(e->u.text.out_string) && ui_ctx.selection_beg < ui_ctx.selection_end)
@@ -725,8 +750,8 @@ void ui_render_element_(UIElement *e)
 		case k_EUIElementTypeCheckbox:
 		{
 			content_y += e->content_height;
-			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
-			ui_render_text_(font, &content_x, &content_y, ": ", props->text_color);
+			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
+			ui_render_text_(font, &content_x, &content_y, 0.f, ": ", props->text_color);
 			float sz = e->content_height;
 			ui_render_quad_(content_x,
 							content_y - sz,
@@ -975,6 +1000,8 @@ bool ui_text(const char *label, char *out_text, size_t out_text_length)
 	e->u.text.out_string_length = out_text_length;
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
+	e->style.width = 100.f;
+	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
 	if(ui_ctx.active_text_input == out_text)
