@@ -470,7 +470,7 @@ bool ui_init(int width, int height)
 		style->background_color[0] = 1.f;
 		style->background_color[1] = 1.f;
 		style->background_color[2] = 1.f;
-		style->background_color[3] = 1.f;
+		style->background_color[3] = 0.f;
 		style->text_color[0] = 0.f;
 		style->text_color[1] = 0.f;
 		style->text_color[2] = 0.f;
@@ -478,7 +478,7 @@ bool ui_init(int width, int height)
 		style->border_color[0] = 0.f;
 		style->border_color[1] = 0.f;
 		style->border_color[2] = 0.f;
-		style->border_color[3] = 1.f;
+		style->border_color[3] = 0.f;
 		style->margin = 5.f;
 		style->padding_y = 2.5f;
 		style->padding_x = 10.f;
@@ -494,6 +494,7 @@ bool ui_init(int width, int height)
 
 	{
 		UIStyleProps *style = &ui_ctx.styles[k_EUIStyleSelectorInput].initial;
+		style->background_color[3] = 1.f;
 		style->border_color[0] = 143.f / 255.f;
 		style->border_color[1] = 143.f / 255.f;
 		style->border_color[2] = 157.f / 255.f;
@@ -678,6 +679,7 @@ void ui_render_element_(UIElement *e)
 	switch(e->type)
 	{
 		case k_EUIElementTypeButton:
+		case k_EUIElementTypeLabel:
 			content_y += e->content_height;
 			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
 			break;
@@ -891,30 +893,6 @@ void ui_element_content_measurements_(UIElement *e, float *w, float *h)
 	}
 }
 
-void ui_label(const char *fmt, ...)
-{
-#if 0
-	char text[2048] = { 0 };
-	if(fmt)
-	{
-		va_list va;
-		va_start(va, fmt);
-		vsnprintf(text, sizeof(text), fmt, va);
-		va_end(va);
-	}
-	UIElement *e = ui_new_element_(k_EUIElementTypeLabel);
-	snprintf(e->label, sizeof(e->label), "%s", text);
-	e->rect.x = ui_ctx.x;
-	e->rect.y = ui_ctx.y;
-	ui_font_measure_text(ui_ctx.default_font, text, &e->rect.w, &e->rect.h);
-	e->rect.w += ui_ctx.style.padding_x;
-	e->rect.h += ui_ctx.style.padding_y;
-	ui_ctx.y += e->rect.h;
-	ui_ctx.y += ui_ctx.style.border_thickness;
-	ui_ctx.y += ui_ctx.style.margin;
-	#endif
-}
-
 void ui_element_bounds_(UIElement *e)
 {
 	UIStyleProps *props = &e->style;
@@ -926,16 +904,20 @@ void ui_element_bounds_(UIElement *e)
 	{
 		props->height = e->content_height;
 	}
-	e->rect.x = ui_ctx.x; //TODO?: margin-left: -10px
+	e->rect.x = ui_ctx.x; // TODO?: margin-left: -10px
 	e->rect.y = ui_ctx.y;
 	e->rect.w = props->border_thickness * 2.f + props->padding_x + props->margin + props->width;
 	e->rect.h = props->border_thickness * 2.f + props->padding_y + props->margin + props->height;
 }
 
-void ui_input_(UIElement *e)
+void ui_element_layout_next_(UIElement *e)
+{
+	ui_ctx.y += e->rect.h;
+}
+
+void ui_element_style_(UIElement *e, UIStyle *style)
 {
 	ui_element_content_measurements_(e, &e->content_width, &e->content_height);
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	e->style = style->initial;
 	ui_element_bounds_(e);
 	if(ui_mouse_test_rectangle(&e->rect))
@@ -953,9 +935,23 @@ void ui_input_(UIElement *e)
 	}
 }
 
-void ui_element_layout_next_(UIElement *e)
+void ui_label(const char *fmt, ...)
 {
-	ui_ctx.y += e->rect.h;
+	char text[256] = { 0 };
+	if(fmt)
+	{
+		va_list va;
+		va_start(va, fmt);
+		vsnprintf(text, sizeof(text), fmt, va);
+		va_end(va);
+	}
+	UIElement *e = ui_new_element_(k_EUIElementTypeLabel);
+	snprintf(e->label, sizeof(e->label), "%s", text);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorDefault];
+	ui_element_style_(e, style);
+
+	ui_element_layout_next_(e);
+	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
 }
 
 bool ui_button(const char *label)
@@ -964,7 +960,8 @@ bool ui_button(const char *label)
 	//TODO: check previous frame input state for this element and return true if it was pressed
 	UIElement *e = ui_new_element_(k_EUIElementTypeButton);
 	snprintf(e->label, sizeof(e->label), "%s", label);
-	ui_input_(e);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	ui_element_style_(e, style);
 
 	ui_element_layout_next_(e);
 	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
@@ -976,7 +973,8 @@ bool ui_text(const char *label, char *out_text, size_t out_text_length)
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.text.out_string = out_text;
 	e->u.text.out_string_length = out_text_length;
-	ui_input_(e);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	ui_element_style_(e, style);
 
 	ui_element_layout_next_(e);
 	if(ui_ctx.active_text_input == out_text)
@@ -991,7 +989,8 @@ bool ui_checkbox(const char *label, bool *out_cond)
 	UIElement *e = ui_new_element_(k_EUIElementTypeCheckbox);
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.checkbox.state = out_cond;
-	ui_input_(e);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	ui_element_style_(e, style);
 
 	ui_element_layout_next_(e);
 	bool pressed = ui_clicked() && ui_mouse_test_rectangle(&e->rect);
