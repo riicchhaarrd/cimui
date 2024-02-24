@@ -19,13 +19,33 @@ typedef struct
 	float border_thickness;
 	float border_color[4];
 	float margin;
+	float width;
+	float height;
+	float max_width;
+	float max_height;
 	float padding_x;
 	float padding_y;
 	float background_color[4];
 	float text_color[4];
 	//float text_color_hover[4];
 	//float background_color_hover[4];
+} UIStyleProps;
+
+typedef struct
+{
+	//UIStyleProps selectors[...];
+	UIStyleProps initial; // Default
+	UIStyleProps hovered;
+	UIStyleProps active;
+	UIStyleProps focused;
 } UIStyle;
+
+enum
+{
+	k_EUIStyleSelectorDefault,
+	k_EUIStyleSelectorInput,
+	k_EUIStyleSelectorMax
+} k_EUIStyleSelector;
 
 typedef struct UIFont_s
 {
@@ -62,7 +82,8 @@ typedef enum
 	k_EUIElementTypeLabel,
 	k_EUIElementTypeText,
 	k_EUIElementTypePane,
-	k_EUIElementTypeFrame
+	k_EUIElementTypeFrame,
+	k_EUIElementTypeMax
 } k_EUIElementType;
 
 typedef struct
@@ -83,6 +104,8 @@ typedef struct
 		UICheckboxElement checkbox;
 	} u;
 	UIRectangle rect;
+	UIStyleProps style;
+	float content_width, content_height;
 } UIElement;
 
 typedef struct
@@ -102,18 +125,16 @@ typedef struct
 	int width, height;
 	GLuint white_texture;
 	UIMouseState mouse, mouse_prev_frame;
+	bool scan_code_state[SDL_NUM_SCANCODES];
 	bool interact_active;
-	UIStyle style;
-	UIStyle style_hovered;
-	UIStyle button_style;
-	UIStyle button_style_hovered;
-	UIStyle input_style;
-	UIStyle input_style_hovered;
-	UIStyle input_style_active;
+
+	UIStyle styles[k_EUIStyleSelectorMax];
 
 	char *active_text_input;
 	size_t max_active_text_input_length;
 	bool text_input_changed;
+	int selection_beg, selection_end;
+	int caret_pos;
 } UIContext;
 static UIContext ui_ctx;
 
@@ -178,112 +199,71 @@ UIFont *ui_load_font(const char *path)
 
 	return font;
 }
-#if 0
-void ui_font_measure_text(UIFont *font, const char *text, float *width, float *height)
-{
-	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
-	int ascent, descent, lineGap;
-	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &lineGap);
-	*width = 0;
-	#if 0
-	if(height)
-	{
-		*height = (ascent - descent + lineGap) * scale;
-	}
-	#endif
-	if(height)
-	{
-		*height = 0.f;
-	}
-	float x, y;
-	for(const char *p = text; *p; ++p)
-	{
-		stbtt_aligned_quad q;
-		stbtt_GetBakedQuad(font->cdata, 512, 512, *text - 32, &x, &y, &q, 1);
-		if(height)
-		{
-			float h = (q.y1 - q.y0);
-			if(h > *height)
-				*height = h;
-		}
-		int advance, lsb;
-		stbtt_GetCodepointHMetrics(&font->font_info, *p, &advance, &lsb);
-		*width += advance * scale;
-	}
-}
-#else
-void ui_font_measure_text(UIFont *font, const char *text, float *width, float *height)
+void ui_font_measure_text(UIFont *font, const char *beg, const char *end, float *width, float *height)
 {
 	if(width)
 	{
 		*width = 0.f;
 	}
+	#if 0
 	if(height)
 	{
 		*height = 0.f;
 	}
+	#endif
 
 	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
+	#if 0
 	int ascent, descent, lineGap;
 	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &lineGap);
 	if(height)
 	{
 		*height = (ascent - descent + lineGap) * scale;
 	}
-	while(*text)
+	#endif
+	float x, y;
+	while(1)
 	{
-		if(*text >= 32 && *text < 128)
+		if(end)
+		{
+			if(beg == end)
+				break;
+		}
+		else
+		{
+			if(!*beg)
+				break;
+		}
+		if(*beg >= 32 && *beg < 128)
 		{
 			int advance, lsb, x0, y0, x1, y1;
-			stbtt_GetCodepointHMetrics(&font->font_info, *text, &advance, &lsb);
-			stbtt_GetCodepointBitmapBox(&font->font_info, *text, 1, 1, &x0, &y0, &x1, &y1);
+			stbtt_GetCodepointHMetrics(&font->font_info, *beg, &advance, &lsb);
+			stbtt_GetCodepointBitmapBox(&font->font_info, *beg, 1, 1, &x0, &y0, &x1, &y1);
 			if(width)
 			{
 				*width += advance * scale;
 			}
 
-			#if 0
 			stbtt_aligned_quad q;
-			stbtt_GetBakedQuad(font->cdata, 512, 512, *text - 32, &x, &y, &q, 1);
+			stbtt_GetBakedQuad(font->cdata, 512, 512, *beg - 32, &x, &y, &q, 1);
+#if 0
 			if(width)
 			{
 				*width += (q.x1 - q.x0);
 			}
+#endif
 			if(height)
 			{
 				float h = (q.y1 - q.y0);
-				if(h > *height)
+				if(*height == 0.f || h > *height)
 				{
 					*height = h;
 				}
 			}
-			#endif
 		}
-		++text;
+		++beg;
 	}
 }
-#endif
-#if 0
-float ui_font_measure_text_width(UIFont *font, const char *str)
-{
-	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
-
-	int ascent, descent, lineGap;
-	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &lineGap);
-
-	int width = 0;
-	int x = 0;
-	while(*str)
-	{
-		int advance, lsb;
-		int codepoint = stbtt_FindGlyphIndex(&font->font_info, *str);
-		stbtt_GetGlyphHMetrics(&font->font_info, codepoint, &advance, &lsb);
-		width += advance * scale;
-		++str;
-	}
-	return (float)width;
-}
-#endif
 static UIElement *ui_new_element_(k_EUIElementType type)
 {
 	if(ui_ctx.numelements >= ui_ctx.maxelements)
@@ -303,10 +283,32 @@ static UIElement *ui_new_element_(k_EUIElementType type)
 	return e;
 }
 
+bool ui_input_selection_valid()
+{
+	size_t n = strlen(ui_ctx.active_text_input);
+	return ui_ctx.selection_beg >= 0 && ui_ctx.selection_end <= n && ui_ctx.selection_beg < ui_ctx.selection_end;
+}
+void ui_input_clear_selection()
+{
+	ui_ctx.selection_beg = -1;
+	ui_ctx.selection_end = -1;
+}
+void ui_input_remove_selection()
+{
+	size_t n = strlen(ui_ctx.active_text_input);
+	memmove(&ui_ctx.active_text_input[ui_ctx.selection_beg],
+			&ui_ctx.active_text_input[ui_ctx.selection_end + 1],
+			n + 1 - ui_ctx.selection_end);
+	ui_ctx.caret_pos = 0;
+	ui_input_clear_selection();
+}
+
 bool ui_event(SDL_Event *ev)
 {
 	if(SDL_GetRelativeMouseMode())
 		return false;
+	bool ctrl = ui_ctx.scan_code_state[SDL_SCANCODE_LCTRL] || ui_ctx.scan_code_state[SDL_SCANCODE_RCTRL];
+	bool shift = ui_ctx.scan_code_state[SDL_SCANCODE_LSHIFT] || ui_ctx.scan_code_state[SDL_SCANCODE_RSHIFT];
 	switch(ev->type)
 	{
 		case SDL_MOUSEMOTION:
@@ -317,30 +319,106 @@ bool ui_event(SDL_Event *ev)
 		case SDL_MOUSEBUTTONDOWN: ui_ctx.mouse.buttons[0] = true; break;
 		case SDL_MOUSEBUTTONUP: ui_ctx.mouse.buttons[0] = false; break;
 
+		case SDL_KEYUP:
+		{
+			ui_ctx.scan_code_state[ev->key.keysym.scancode] = false;
+		}
+		break;
 		case SDL_KEYDOWN:
 		{
-			if(ev->key.keysym.sym == SDLK_BACKSPACE)
+			ui_ctx.scan_code_state[ev->key.keysym.scancode] = true;
+			switch(ev->key.keysym.sym)
 			{
-				if(ui_ctx.active_text_input)
+#if 0
+				case SDLK_LEFT:
+				case SDLK_RIGHT:
 				{
-					size_t maxchars = ui_ctx.max_active_text_input_length;
-					size_t n = strlen(ui_ctx.active_text_input);
-					if(n > 0)
+					if(ui_ctx.active_text_input)
 					{
-						ui_ctx.active_text_input[n - 1] = 0;
+						size_t maxchars = ui_ctx.max_active_text_input_length;
+						size_t n = strlen(ui_ctx.active_text_input);
+						if(n > 0)
+						{
+							if(shift)
+							{
+								if(ui_input_selection_valid())
+								{
+									if(ev->key.keysym.sym == SDLK_LEFT)
+									{
+										ui_ctx.selection_end = max(ui_ctx.selection_end + 1, n);
+									}
+								}
+							}
+							else
+							{
+								if(ev->key.keysym.sym == SDLK_LEFT)
+								{
+									ui_ctx.caret_pos = max(ui_ctx.caret_pos - 1, 0);
+								}
+								else
+								{
+									ui_ctx.caret_pos = min(ui_ctx.caret_pos + 1, n);
+								}
+							}
+						}
 					}
-					ui_ctx.text_input_changed = true;
 				}
+				break;
+#endif
+				case SDLK_BACKSPACE:
+				{
+					if(ui_ctx.active_text_input)
+					{
+						size_t maxchars = ui_ctx.max_active_text_input_length;
+						size_t n = strlen(ui_ctx.active_text_input);
+						if(n > 0)
+						{
+							if(ui_input_selection_valid())
+							{
+								ui_input_remove_selection();
+							}
+							else
+							{
+								ui_ctx.active_text_input[n - 1] = 0;
+							}
+						}
+						ui_ctx.text_input_changed = true;
+					}
+				}
+				break;
+				#if 0
+				case SDLK_a:
+				{
+					if(ctrl && ui_ctx.active_text_input)
+					{
+						size_t maxchars = ui_ctx.max_active_text_input_length;
+						size_t n = strlen(ui_ctx.active_text_input);
+						if(n > 0)
+						{
+							ui_ctx.selection_beg = 0;
+							ui_ctx.selection_end = n;
+							ui_ctx.caret_pos = n;
+						}
+					}
+				}
+				break;
+				#endif
 			}
 		}
 		break;
 		case SDL_TEXTINPUT:
 		{
-			if(ui_ctx.active_text_input)
+			if(!ctrl && ui_ctx.active_text_input)
 			{
 				size_t maxchars = ui_ctx.max_active_text_input_length;
 				size_t n = strlen(ui_ctx.active_text_input);
+				if(ui_input_selection_valid())
+				{
+					ui_input_remove_selection();
+					n = strlen(ui_ctx.active_text_input);
+				}
 				strncat(ui_ctx.active_text_input, ev->text.text, maxchars - n - 1);
+				ui_ctx.caret_pos = n;
 			}
 		}
 		break;
@@ -348,8 +426,28 @@ bool ui_event(SDL_Event *ev)
 	return true;
 }
 
+void inherit_style(UIStyle *dst, UIStyle *src)
+{
+	if(dst == src)
+	{
+		dst->hovered = dst->initial;
+		dst->active = dst->initial;
+		dst->focused = dst->initial;
+	}
+	else
+	{
+		memcpy(dst, src, sizeof(UIStyle));
+	}
+}
+SDL_Cursor *default_cursor;
+SDL_Cursor *hand_cursor;
+SDL_Cursor *text_cursor;
 bool ui_init(int width, int height)
 {
+	default_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+	hand_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+	text_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
+
 	memset(&ui_ctx, 0, sizeof(UIContext));
 	ui_ctx.default_font = ui_load_font("C:/Windows/Fonts/arial.ttf", ui_ctx.default_font);
 	GLuint create_program(const char *path, const char *vs_source, const char *fs_source);
@@ -366,8 +464,9 @@ bool ui_init(int width, int height)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
 	{
-		UIStyle *style = &ui_ctx.style;
+		UIStyleProps *style = &ui_ctx.styles[k_EUIStyleSelectorDefault].initial;
 		style->background_color[0] = 1.f;
 		style->background_color[1] = 1.f;
 		style->background_color[2] = 1.f;
@@ -382,25 +481,19 @@ bool ui_init(int width, int height)
 		style->border_color[3] = 1.f;
 		style->margin = 5.f;
 		style->padding_y = 2.5f;
-		style->padding_x = 5.f;
+		style->padding_x = 10.f;
 		style->border_thickness = 1.f;
+		ui_ctx.styles[k_EUIStyleSelectorDefault].hovered = ui_ctx.styles[k_EUIStyleSelectorDefault].initial;
+		ui_ctx.styles[k_EUIStyleSelectorDefault].active = ui_ctx.styles[k_EUIStyleSelectorDefault].initial;
+		ui_ctx.styles[k_EUIStyleSelectorDefault].focused = ui_ctx.styles[k_EUIStyleSelectorDefault].initial;
+		for(size_t i = 1; i < k_EUIStyleSelectorMax; ++i)
+		{
+			ui_ctx.styles[i] = ui_ctx.styles[k_EUIStyleSelectorDefault];
+		}
 	}
 
-	ui_ctx.style_hovered = ui_ctx.style;
 	{
-		UIStyle *style = &ui_ctx.style_hovered;
-		style->background_color[0] = 0.8f;
-		style->background_color[1] = 0.8f;
-		style->background_color[2] = 0.8f;
-		style->background_color[3] = 1.f;
-		style->text_color[0] = 0.5f;
-		style->text_color[1] = 0.5f;
-		style->text_color[2] = 0.5f;
-		style->text_color[3] = 1.f;
-	}
-	ui_ctx.button_style = ui_ctx.style;
-	{
-		UIStyle *style = &ui_ctx.button_style;
+		UIStyleProps *style = &ui_ctx.styles[k_EUIStyleSelectorInput].initial;
 		style->border_color[0] = 143.f / 255.f;
 		style->border_color[1] = 143.f / 255.f;
 		style->border_color[2] = 157.f / 255.f;
@@ -413,34 +506,21 @@ bool ui_init(int width, int height)
 		style->text_color[1] = 0.f;
 		style->text_color[2] = 0.f;
 		style->text_color[3] = 1.f;
+		ui_ctx.styles[k_EUIStyleSelectorInput].hovered = ui_ctx.styles[k_EUIStyleSelectorInput].initial;
+		ui_ctx.styles[k_EUIStyleSelectorInput].active = ui_ctx.styles[k_EUIStyleSelectorInput].initial;
+		ui_ctx.styles[k_EUIStyleSelectorInput].focused = ui_ctx.styles[k_EUIStyleSelectorInput].initial;
 	}
-	ui_ctx.button_style_hovered = ui_ctx.button_style;
 	{
-		UIStyle *style = &ui_ctx.button_style_hovered;
+		UIStyleProps *style = &ui_ctx.styles[k_EUIStyleSelectorInput].hovered;
 		style->background_color[0] = 180.f / 255.f;
 		style->background_color[1] = 180.f / 255.f;
 		style->background_color[2] = 184.f / 255.f;
 	}
-	ui_ctx.input_style = ui_ctx.button_style;
 	{
-		UIStyle *style = &ui_ctx.input_style;
-		style->background_color[0] = 1.f;
-		style->background_color[1] = 1.f;
-		style->background_color[2] = 1.f;
-		style->background_color[3] = 1.f;
-		style->text_color[0] = 0.f;
-		style->text_color[1] = 0.f;
-		style->text_color[2] = 0.f;
-		style->text_color[3] = 1.f;
-	}
-	ui_ctx.input_style_hovered = ui_ctx.input_style;
-	ui_ctx.input_style_active = ui_ctx.input_style;
-	{
-		UIStyle *style = &ui_ctx.input_style_active;
+		UIStyleProps *style = &ui_ctx.styles[k_EUIStyleSelectorInput].focused;
 		style->border_color[0] = 0.f;
 		style->border_color[1] = 0.f;
 		style->border_color[2] = 1.f;
-		style->border_color[3] = 1.f;
 	}
 
 	return true;
@@ -566,24 +646,10 @@ void ui_render_quad_(float x, float y, float width, float height, float *bgcolor
 	// glDrawArrays(GL_QUADS, 0, 4);
 	CHECK_GL_ERROR();
 }
-void ui_render_quad_with_border_(UIStyle *style, float x, float y, float width, float height)
-{
-	float border = style->border_thickness;
-	ui_render_quad_(x, y, width, height, style->background_color);
-
-	ui_render_quad_(x - border, y - border, width + 2.f * border, border, style->border_color);
-	ui_render_quad_(x - border, y + height, width + 2.f * border, border, style->border_color);
-	ui_render_quad_(x - border, y, border, height, style->border_color);
-	ui_render_quad_(x + width, y, border, height, style->border_color);
-}
 void ui_render_element_(UIElement *e)
 {
 	UIFont *font = ui_ctx.default_font;
-	float x = e->rect.x;
-	float y = e->rect.y;
-	float w = e->rect.w;
-	float h = e->rect.h;
-	bool hovering = ui_mouse_test_rectangle(&e->rect);
+	//bool hovering = ui_mouse_test_rectangle(&e->rect);
 	static unsigned int blink_time = 0;
 	unsigned int now = ticks();
 	static bool draw_caret = false;
@@ -593,69 +659,85 @@ void ui_render_element_(UIElement *e)
 		blink_time += 600;
 	}
 	
-	UIStyle *style = hovering ? &ui_ctx.style_hovered : &ui_ctx.style;
+	UIStyleProps *props = &e->style;
+
+	float x = e->rect.x;
+	float y = e->rect.y;
+	float w = e->rect.w;
+	float h = e->rect.h;
+	float content_x = x + props->border_thickness + props->padding_x / 2.f + props->margin / 2.f;
+	float content_y = y + props->border_thickness + props->padding_y / 2.f + props->margin / 2.f;
+	ui_render_quad_(x, y, w, h, props->border_color);
+
+	ui_render_quad_(x + props->border_thickness,
+					y + props->border_thickness,
+					w - 2.0f * props->border_thickness,
+					h - 2.0f * props->border_thickness,
+					props->background_color);
 
 	switch(e->type)
 	{
 		case k_EUIElementTypeButton:
-
-			style = hovering ? &ui_ctx.button_style_hovered : &ui_ctx.button_style;
-
-			ui_render_quad_with_border_(style, x, y, w, h);
-			x += style->padding_x / 2.f;
-			y += (style->padding_y + h) / 2.f + ui_ctx.style.margin;
-			ui_render_text_(font,
-							&x,
-							&y, e->label, style->text_color);
+			content_y += e->content_height;
+			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
 			break;
-		case k_EUIElementTypeCheckbox:
-		{
-			style = hovering ? &ui_ctx.input_style_hovered : &ui_ctx.input_style;
-			bool checked = *e->u.checkbox.state;
-			ui_render_quad_with_border_(style, x, y, w, h);
-			x += style->padding_x / 2.f;
-			y += (style->padding_y + h) / 2.f + ui_ctx.style.margin;
-			ui_render_text_(font, &x, &y, e->label, style->text_color);
-			ui_render_text_(font, &x, &y, checked ? ": [X]" : ": [ ]", style->text_color);
-		}
-		break;
-		case k_EUIElementTypeLabel:
-		{
-			x += style->padding_x / 2.f;
-			y += (style->padding_y + h) / 2.f + ui_ctx.style.margin;
-			ui_render_text_(font,
-							&x,
-							&y,
-							e->label, style->text_color);
-		} break;
 		case k_EUIElementTypeText:
 		{
-			style = hovering ? &ui_ctx.input_style_hovered : &ui_ctx.input_style;
-			if(ui_ctx.active_text_input == e->u.text.out_string)
-			{
-				style = &ui_ctx.input_style_active;
-			}
-			//float text_width, text_height;
-			//ui_font_measure_text(font, e->label, &text_width, &text_height);
-			ui_render_quad_with_border_(style,
-										x,
-										y,
-										w,
-										h);
-			x += style->padding_x / 2.f;
-			y += (style->padding_y + h) / 2.f + ui_ctx.style.margin;
-			ui_render_text_(font, &x, &y, e->label, style->text_color);
-			ui_render_text_(font, &x, &y, ": ", style->text_color);
+			float value_y = content_y;
+			content_y += e->content_height;
+			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
+			ui_render_text_(font, &content_x, &content_y, ": ", props->text_color);
 			if(e->u.text.out_string)
 			{
-				ui_render_text_(font, &x, &y, e->u.text.out_string, style->text_color);
+				float value_x = content_x;
+				ui_render_text_(font, &content_x, &content_y, e->u.text.out_string, props->text_color);
 				if(ui_ctx.active_text_input == e->u.text.out_string)
 				{
-					if(draw_caret)
+					if(draw_caret && ui_ctx.caret_pos >= 0 && ui_ctx.caret_pos <= strlen(e->u.text.out_string))
 					{
-						ui_render_text_(font, &x, &y, "|", style->text_color);
+						float caret_x_offset = 0.f;
+						ui_font_measure_text(ui_ctx.default_font,
+											 e->u.text.out_string,
+											 e->u.text.out_string + ui_ctx.caret_pos,
+											 &caret_x_offset,
+											 NULL);
+						caret_x_offset += value_x - 1.f;
+						ui_render_text_(font, &caret_x_offset, &content_y, "|", props->text_color);
 					}
 				}
+				if(ui_ctx.selection_beg >= 0 && ui_ctx.selection_end <= strlen(e->u.text.out_string) && ui_ctx.selection_beg < ui_ctx.selection_end)
+				{
+					size_t n = ui_ctx.selection_end - ui_ctx.selection_beg;
+					float selx = 0.f, sely = 0.f;
+					ui_font_measure_text(ui_ctx.default_font,
+										 e->u.text.out_string,
+										 e->u.text.out_string + n,
+										 &selx,
+										 &sely);
+					static const float selcol[] = { 0.f, 0.f, 1.f, 0.5f };
+					ui_render_quad_(value_x, value_y, selx, e->content_height, selcol);
+
+				}
+			}
+		} break;
+		case k_EUIElementTypeCheckbox:
+		{
+			content_y += e->content_height;
+			ui_render_text_(font, &content_x, &content_y, e->label, props->text_color);
+			ui_render_text_(font, &content_x, &content_y, ": ", props->text_color);
+			float sz = e->content_height;
+			ui_render_quad_(content_x,
+							content_y - sz,
+							sz,
+							sz,
+							props->text_color);
+			if(*e->u.checkbox.state)
+			{
+				ui_render_quad_(content_x + sz / 4.f,
+								content_y - e->content_height + sz / 4.f,
+								sz / 2.f,
+								sz / 2.f,
+								props->background_color);
 			}
 		} break;
 	}
@@ -710,19 +792,49 @@ void ui_render()
 	//ui_render_quad_(ui_ctx.mouse.x, ui_ctx.mouse.y, 8.f, 8.f, color);
 	char *active_text_input = ui_ctx.active_text_input;
 	UIElement *active_element = NULL;
+	UIElement *hovered_element = NULL;
 	for(size_t i = 0; i < ui_ctx.numelements; ++i)
 	{
 		UIElement *e = &ui_ctx.elements[i];
-		if(ui_clicked() && ui_mouse_test_rectangle(&e->rect))
+		bool hovered = ui_mouse_test_rectangle(&e->rect);
+		if(hovered)
 		{
-			active_element = e;
-			if(e->type = k_EUIElementTypeText)
+			hovered_element = e;
+			if(ui_clicked())
 			{
-				ui_ctx.active_text_input = e->u.text.out_string;
-				ui_ctx.max_active_text_input_length = e->u.text.out_string_length;
+				active_element = e;
+				if(e->type = k_EUIElementTypeText)
+				{
+					ui_ctx.active_text_input = e->u.text.out_string;
+					ui_ctx.max_active_text_input_length = e->u.text.out_string_length;
+					ui_ctx.caret_pos = 0;
+					ui_ctx.text_input_changed = false;
+					void ui_input_clear_selection();
+					ui_input_clear_selection();
+				}
 			}
 		}
 		ui_render_element_(e);
+	}
+	if(hovered_element)
+	{
+		//TODO: add cursor to style props
+		if(hovered_element->type == k_EUIElementTypeButton || hovered_element->type == k_EUIElementTypeCheckbox)
+		{
+			SDL_SetCursor(hand_cursor);
+		}
+		else if(hovered_element->type == k_EUIElementTypeText)
+		{
+			SDL_SetCursor(text_cursor);
+		}
+		else
+		{
+			SDL_SetCursor(default_cursor);
+		}
+	}
+	else
+	{
+		SDL_SetCursor(default_cursor);
 	}
 	if(ui_clicked() && !active_element)
 	{
@@ -751,36 +863,37 @@ void ui_cleanup()
 	ui_ctx.default_font = NULL;
 }
 
-bool ui_text(const char *label, char *out_text, size_t out_text_length)
+void ui_element_content_measurements_(UIElement *e, float *w, float *h)
 {
-	UIElement *e = ui_new_element_(k_EUIElementTypeText);
-	e->u.text.out_string = out_text;
-	e->u.text.out_string_length = out_text_length;
-	snprintf(e->label, sizeof(e->label), "%s", label);
-	e->rect.x = ui_ctx.x;
-	e->rect.y = ui_ctx.y;
-	
-	float w;
-	ui_font_measure_text(ui_ctx.default_font, label, &w, &e->rect.h);
-	e->rect.w = w;
-	ui_font_measure_text(ui_ctx.default_font, ": |", &w, NULL);
-	e->rect.w += w;
-	ui_font_measure_text(ui_ctx.default_font, out_text, &w, NULL);
-	e->rect.w += w;
-	e->rect.w += ui_ctx.style.padding_x;
-	e->rect.h += ui_ctx.style.padding_y;
-
-	ui_ctx.y += e->rect.h;
-	ui_ctx.y += ui_ctx.style.border_thickness;
-	ui_ctx.y += ui_ctx.style.margin;
-	if(ui_ctx.active_text_input == out_text)
+	*w = *h = 0.f;
+	switch(e->type)
 	{
-		return ui_ctx.text_input_changed;
+		case k_EUIElementTypeButton:
+		case k_EUIElementTypeLabel:
+		{
+			ui_font_measure_text(ui_ctx.default_font, e->label, NULL, w, h);
+		} break;
+		case k_EUIElementTypeCheckbox:
+		{
+			ui_font_measure_text(ui_ctx.default_font, e->label, NULL, w, h);
+			*w += *h * 2.f;
+		} break;
+		case k_EUIElementTypeText:
+		{
+			float x;
+			ui_font_measure_text(ui_ctx.default_font, e->label, NULL, &x, h);
+			*w = x;
+			ui_font_measure_text(ui_ctx.default_font, ": |", NULL, &x, h);
+			*w += x;
+			ui_font_measure_text(ui_ctx.default_font, e->u.text.out_string, NULL, &x, h);
+			*w += x;
+		} break;
 	}
-	return false;
 }
+
 void ui_label(const char *fmt, ...)
 {
+#if 0
 	char text[2048] = { 0 };
 	if(fmt)
 	{
@@ -799,6 +912,50 @@ void ui_label(const char *fmt, ...)
 	ui_ctx.y += e->rect.h;
 	ui_ctx.y += ui_ctx.style.border_thickness;
 	ui_ctx.y += ui_ctx.style.margin;
+	#endif
+}
+
+void ui_element_bounds_(UIElement *e)
+{
+	UIStyleProps *props = &e->style;
+	if(props->width == 0.f)
+	{
+		props->width = e->content_width;
+	}
+	if(props->height == 0.f)
+	{
+		props->height = e->content_height;
+	}
+	e->rect.x = ui_ctx.x; //TODO?: margin-left: -10px
+	e->rect.y = ui_ctx.y;
+	e->rect.w = props->border_thickness * 2.f + props->padding_x + props->margin + props->width;
+	e->rect.h = props->border_thickness * 2.f + props->padding_y + props->margin + props->height;
+}
+
+void ui_input_(UIElement *e)
+{
+	ui_element_content_measurements_(e, &e->content_width, &e->content_height);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	e->style = style->initial;
+	ui_element_bounds_(e);
+	if(ui_mouse_test_rectangle(&e->rect))
+	{
+		e->style = style->hovered;
+		ui_element_bounds_(e);
+	}
+	if(e->type == k_EUIElementTypeText)
+	{
+		if(ui_ctx.active_text_input == e->u.text.out_string)
+		{
+			e->style = style->focused;
+			ui_element_bounds_(e);
+		}
+	}
+}
+
+void ui_element_layout_next_(UIElement *e)
+{
+	ui_ctx.y += e->rect.h;
 }
 
 bool ui_button(const char *label)
@@ -807,35 +964,36 @@ bool ui_button(const char *label)
 	//TODO: check previous frame input state for this element and return true if it was pressed
 	UIElement *e = ui_new_element_(k_EUIElementTypeButton);
 	snprintf(e->label, sizeof(e->label), "%s", label);
-	e->rect.x = ui_ctx.x;
-	e->rect.y = ui_ctx.y;
-	ui_font_measure_text(ui_ctx.default_font, label, &e->rect.w, &e->rect.h);
-	e->rect.w += ui_ctx.style.padding_x;
-	e->rect.h += ui_ctx.style.padding_y;
+	ui_input_(e);
 
-	ui_ctx.y += e->rect.h;
-	ui_ctx.y += ui_ctx.style.border_thickness;
-	ui_ctx.y += ui_ctx.style.margin;
+	ui_element_layout_next_(e);
 	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
+}
+
+bool ui_text(const char *label, char *out_text, size_t out_text_length)
+{
+	UIElement *e = ui_new_element_(k_EUIElementTypeText);
+	snprintf(e->label, sizeof(e->label), "%s", label);
+	e->u.text.out_string = out_text;
+	e->u.text.out_string_length = out_text_length;
+	ui_input_(e);
+
+	ui_element_layout_next_(e);
+	if(ui_ctx.active_text_input == out_text)
+	{
+		return ui_ctx.text_input_changed;
+	}
+	return false;
 }
 
 bool ui_checkbox(const char *label, bool *out_cond)
 {
 	UIElement *e = ui_new_element_(k_EUIElementTypeCheckbox);
-	e->u.checkbox.state = out_cond;
 	snprintf(e->label, sizeof(e->label), "%s", label);
-	e->rect.x = ui_ctx.x;
-	e->rect.y = ui_ctx.y;
-	ui_font_measure_text(ui_ctx.default_font, label, &e->rect.w, &e->rect.h);
-	float w;
-	ui_font_measure_text(ui_ctx.default_font, ": [X]", &w, NULL);
-	e->rect.w += w;
-	e->rect.w += ui_ctx.style.padding_x;
-	e->rect.h += ui_ctx.style.padding_y;
+	e->u.checkbox.state = out_cond;
+	ui_input_(e);
 
-	ui_ctx.y += e->rect.h;
-	ui_ctx.y += ui_ctx.style.border_thickness;
-	ui_ctx.y += ui_ctx.style.margin;
+	ui_element_layout_next_(e);
 	bool pressed = ui_clicked() && ui_mouse_test_rectangle(&e->rect);
 	if(pressed)
 	{
