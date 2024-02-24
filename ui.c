@@ -163,7 +163,7 @@ void main() {\n\
 UIFont *ui_load_font(const char *path)
 {
 	UIFont *font = calloc(1, sizeof(UIFont));
-	font->font_size = 18;
+	font->font_size = 16;
 	snprintf(font->path, sizeof(font->path), path);
 
 	if(k_EIOResultOk != io_read_binary_file(font->path, &font->ttf_buffer, NULL, NULL))
@@ -749,6 +749,8 @@ void ui_render_element_(UIElement *e)
 		} break;
 		case k_EUIElementTypeCheckbox:
 		{
+			static const float color[] = { 0.f, 0.f, 1.f, 1.f };
+			static const float color2[] = { 1.f, 1.f, 1.f, 1.f };
 			content_y += e->content_height;
 			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
 			ui_render_text_(font, &content_x, &content_y, 0.f, ": ", props->text_color);
@@ -756,15 +758,14 @@ void ui_render_element_(UIElement *e)
 			ui_render_quad_(content_x,
 							content_y - sz,
 							sz,
-							sz,
-							props->text_color);
-			if(*e->u.checkbox.state)
+							sz, color);
+			if(!*e->u.checkbox.state)
 			{
 				ui_render_quad_(content_x + sz / 4.f,
 								content_y - e->content_height + sz / 4.f,
 								sz / 2.f,
 								sz / 2.f,
-								props->background_color);
+								color2);
 			}
 		} break;
 	}
