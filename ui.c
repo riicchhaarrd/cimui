@@ -135,6 +135,8 @@ typedef struct
 	bool text_input_changed;
 	int selection_beg, selection_end;
 	int caret_pos;
+	bool sameline;
+	UIElement *last_element;
 } UIContext;
 static UIContext ui_ctx;
 
@@ -275,6 +277,9 @@ static UIElement *ui_new_element_(k_EUIElementType type)
 		ui_ctx.maxelements = n;
 	}
 	UIElement *e = &ui_ctx.elements[ui_ctx.numelements++];
+	void ui_element_layout_prev_(UIElement *);
+	ui_element_layout_prev_(e);
+	ui_ctx.last_element = e;
 	memset(e, 0, sizeof(UIElement));
 	e->type = type;
 	e->index = ui_ctx.numelements - 1;
@@ -936,6 +941,17 @@ void ui_element_bounds_(UIElement *e)
 	e->rect.h = props->border_thickness * 2.f + props->padding_y + props->margin + props->height;
 }
 
+void ui_element_layout_prev_(UIElement *e)
+{
+	if(ui_ctx.sameline)
+	{
+		assert(ui_ctx.last_element);
+		// Undo previous layout of last_element
+		ui_ctx.y -= ui_ctx.last_element->rect.h;
+		ui_ctx.x += e->rect.w;
+		ui_ctx.sameline = false;
+	}
+}
 void ui_element_layout_next_(UIElement *e)
 {
 	ui_ctx.y += e->rect.h;
@@ -1027,4 +1043,9 @@ bool ui_checkbox(const char *label, bool *out_cond)
 		*out_cond ^= 1;
 	}
 	return pressed;
+}
+
+void ui_sameline()
+{
+	ui_ctx.sameline = true;
 }

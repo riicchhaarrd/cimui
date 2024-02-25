@@ -8,6 +8,7 @@ void ui_render();
 void ui_update();
 void ui_cleanup();
 
+void ui_sameline();
 bool ui_label(const char *fmt, ...);
 bool ui_button(const char *label);
 bool ui_checkbox(const char *label, bool *out_cond);
