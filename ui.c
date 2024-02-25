@@ -68,11 +68,29 @@ typedef struct
 	bool *state;
 } UICheckboxElement;
 
+typedef enum
+{
+	k_EUIInputElementTypeInvalid,
+	k_EUIInputElementTypeText,
+	k_EUIInputElementTypeInteger,
+	k_EUIInputElementTypeFloat,
+	k_EUIInputElementTypeFloat2,
+	k_EUIInputElementTypeFloat3,
+	k_EUIInputElementTypeFloat4,
+} k_EUIInputElementType;
+
 typedef struct
 {
-	char *out_string;
-	size_t out_string_length;
-} UITextElement;
+	k_EUIInputElementType input_type;
+	void *out_value;
+	size_t out_value_length;
+} UIInputElement;
+
+typedef struct
+{
+	bool is_integer;
+	void *out_value;
+} UINumericInputElement;
 
 typedef enum
 {
@@ -80,7 +98,7 @@ typedef enum
 	k_EUIElementTypeButton,
 	k_EUIElementTypeCheckbox,
 	k_EUIElementTypeLabel,
-	k_EUIElementTypeText,
+	k_EUIElementTypeInput,
 	k_EUIElementTypePane,
 	k_EUIElementTypeFrame,
 	k_EUIElementTypeMax
@@ -100,7 +118,7 @@ typedef struct
 	union
 	{
 		UIButtonElement button;
-		UITextElement text;
+		UIInputElement input;
 		UICheckboxElement checkbox;
 	} u;
 	UIRectangle rect;
@@ -129,7 +147,9 @@ typedef struct
 	bool interact_active;
 
 	UIStyle styles[k_EUIStyleSelectorMax];
-
+	//TODO: move to own type, UIInput?
+	UIInputElement input_element;
+	char small_input_buffer[128];
 	char *active_text_input;
 	size_t max_active_text_input_length;
 	bool text_input_changed;
@@ -387,6 +407,14 @@ bool ui_event(SDL_Event *ev)
 								ui_ctx.active_text_input[n - 1] = 0;
 							}
 						}
+					}
+				}
+				break;
+				case SDLK_RETURN:
+				{
+					if(ui_ctx.input_element.input_type != k_EUIInputElementTypeInvalid)
+					{
+						assert(ui_ctx.active_text_input);
 						ui_ctx.text_input_changed = true;
 					}
 				}
@@ -662,6 +690,35 @@ void ui_render_quad_(float x, float y, float width, float height, float *bgcolor
 	// glDrawArrays(GL_QUADS, 0, 4);
 	CHECK_GL_ERROR();
 }
+char *ui_element_input_to_string(UIElement *e, char *input_str_repr_buf, size_t input_str_repr_buf_sz)
+{
+	if(ui_ctx.input_element.out_value == e->u.input.out_value)
+	{
+		if(ui_ctx.active_text_input)
+		{
+			return ui_ctx.active_text_input;
+		}
+	}
+	assert(input_str_repr_buf_sz >= 1);
+	input_str_repr_buf[0] = 0;
+	if(e->type != k_EUIElementTypeInput)
+		return NULL;
+	switch(e->u.input.input_type)
+	{
+		case k_EUIInputElementTypeInteger:
+		{
+			snprintf(input_str_repr_buf, input_str_repr_buf_sz, "%d", *(int*)e->u.input.out_value);
+		}
+		break;
+		case k_EUIInputElementTypeFloat:
+		{
+			snprintf(input_str_repr_buf, input_str_repr_buf_sz, "%f", *(float*)e->u.input.out_value);
+		}
+		break;
+		case k_EUIInputElementTypeText: return (char*)e->u.input.out_value;
+	}
+	return input_str_repr_buf;
+}
 void ui_render_element_(UIElement *e)
 {
 	UIFont *font = ui_ctx.default_font;
@@ -698,14 +755,16 @@ void ui_render_element_(UIElement *e)
 			content_y += e->content_height;
 			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
 			break;
-		case k_EUIElementTypeText:
+		case k_EUIElementTypeInput:
 		{
 			float value_y = content_y;
 			content_y += e->content_height;
 			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
 			ui_render_text_(font, &content_x, &content_y, 0.f, ": ", props->text_color);
-			if(e->u.text.out_string)
+			if(e->u.input.out_value)
 			{
+				char input_str_repr_buf[128];
+				char *input_str_repr = ui_element_input_to_string(e, input_str_repr_buf, sizeof(input_str_repr_buf));
 				float value_x = content_x;
 				#if 0
 				float text_width = 0.f;
@@ -715,21 +774,23 @@ void ui_render_element_(UIElement *e)
 									 &text_width,
 									 NULL);
 #endif
+				//TODO: cleanup/refactor
 				if(!ui_render_text_(font,
 									&content_x,
 									&content_y,
 									props->width + e->rect.x,
-									e->u.text.out_string,
+									input_str_repr,
 									props->text_color))
 				{
-					if(ui_ctx.active_text_input == e->u.text.out_string)
+					if(ui_ctx.active_text_input == e->u.input.out_value
+					   && e->u.input.input_type == k_EUIInputElementTypeText)
 					{
-						if(draw_caret && ui_ctx.caret_pos >= 0 && ui_ctx.caret_pos <= strlen(e->u.text.out_string))
+						if(draw_caret && ui_ctx.caret_pos >= 0 && ui_ctx.caret_pos <= strlen(input_str_repr))
 						{
 							float caret_x_offset = 0.f;
 							ui_font_measure_text(ui_ctx.default_font,
-												 e->u.text.out_string,
-												 e->u.text.out_string + ui_ctx.caret_pos,
+												 input_str_repr,
+												 input_str_repr + ui_ctx.caret_pos,
 												 &caret_x_offset,
 												 NULL);
 							caret_x_offset += value_x - 1.f;
@@ -737,13 +798,12 @@ void ui_render_element_(UIElement *e)
 						}
 					}
 				}
-				if(ui_ctx.selection_beg >= 0 && ui_ctx.selection_end <= strlen(e->u.text.out_string) && ui_ctx.selection_beg < ui_ctx.selection_end)
+				if(ui_ctx.selection_beg >= 0 && ui_ctx.selection_end <= strlen(input_str_repr)
+				   && ui_ctx.selection_beg < ui_ctx.selection_end && e->u.input.input_type == k_EUIInputElementTypeText)
 				{
 					size_t n = ui_ctx.selection_end - ui_ctx.selection_beg;
 					float selx = 0.f, sely = 0.f;
-					ui_font_measure_text(ui_ctx.default_font,
-										 e->u.text.out_string,
-										 e->u.text.out_string + n,
+					ui_font_measure_text(ui_ctx.default_font, input_str_repr, input_str_repr + n,
 										 &selx,
 										 &sely);
 					static const float selcol[] = { 0.f, 0.f, 1.f, 0.5f };
@@ -836,10 +896,21 @@ void ui_render()
 			if(ui_clicked())
 			{
 				active_element = e;
-				if(e->type = k_EUIElementTypeText)
+				if(e->type = k_EUIElementTypeInput)
 				{
-					ui_ctx.active_text_input = e->u.text.out_string;
-					ui_ctx.max_active_text_input_length = e->u.text.out_string_length;
+					if(e->u.input.input_type == k_EUIInputElementTypeText)
+					{
+						ui_ctx.active_text_input = e->u.input.out_value;
+						ui_ctx.active_text_input[0] = 0;
+						ui_ctx.max_active_text_input_length = e->u.input.out_value_length;
+					}
+					else
+					{
+						ui_ctx.small_input_buffer[0] = 0;
+						ui_ctx.active_text_input = ui_ctx.small_input_buffer;
+						ui_ctx.max_active_text_input_length = sizeof(ui_ctx.small_input_buffer);
+					}
+					ui_ctx.input_element = e->u.input;
 					ui_ctx.caret_pos = 0;
 					ui_ctx.text_input_changed = false;
 					void ui_input_clear_selection();
@@ -856,7 +927,7 @@ void ui_render()
 		{
 			SDL_SetCursor(hand_cursor);
 		}
-		else if(hovered_element->type == k_EUIElementTypeText)
+		else if(hovered_element->type == k_EUIElementTypeInput)
 		{
 			SDL_SetCursor(text_cursor);
 		}
@@ -871,6 +942,7 @@ void ui_render()
 	}
 	if(ui_clicked() && !active_element)
 	{
+		ui_ctx.input_element.input_type = k_EUIInputElementTypeInvalid;
 		ui_ctx.active_text_input = NULL;
 	}
 	if(!active_text_input)
@@ -899,6 +971,7 @@ void ui_cleanup()
 void ui_element_content_measurements_(UIElement *e, float *w, float *h)
 {
 	*w = *h = 0.f;
+	char tmp[128];
 	switch(e->type)
 	{
 		case k_EUIElementTypeButton:
@@ -911,14 +984,15 @@ void ui_element_content_measurements_(UIElement *e, float *w, float *h)
 			ui_font_measure_text(ui_ctx.default_font, e->label, NULL, w, h);
 			*w += *h * 2.f;
 		} break;
-		case k_EUIElementTypeText:
+		case k_EUIElementTypeInput:
 		{
 			float x;
 			ui_font_measure_text(ui_ctx.default_font, e->label, NULL, &x, h);
 			*w = x;
 			ui_font_measure_text(ui_ctx.default_font, ": |", NULL, &x, h);
 			*w += x;
-			ui_font_measure_text(ui_ctx.default_font, e->u.text.out_string, NULL, &x, h);
+			char *text_repr = ui_element_input_to_string(e, tmp, sizeof(tmp));
+			ui_font_measure_text(ui_ctx.default_font, text_repr, NULL, &x, h);
 			*w += x;
 		} break;
 	}
@@ -967,14 +1041,24 @@ void ui_element_style_(UIElement *e, UIStyle *style)
 		e->style = style->hovered;
 		ui_element_bounds_(e);
 	}
-	if(e->type == k_EUIElementTypeText)
+	if(e->type == k_EUIElementTypeInput)
 	{
-		if(ui_ctx.active_text_input == e->u.text.out_string)
+		if(ui_ctx.input_element.out_value == e->u.input.out_value)
 		{
 			e->style = style->focused;
 			ui_element_bounds_(e);
 		}
 	}
+}
+
+void ui_clear_input()
+{
+	ui_ctx.active_text_input = NULL;
+	ui_ctx.max_active_text_input_length = 0;
+	ui_ctx.input_element.input_type = k_EUIInputElementTypeInvalid;
+	ui_ctx.input_element.out_value = NULL;
+	ui_ctx.input_element.out_value_length = 0;
+	ui_ctx.text_input_changed = false;
 }
 
 void ui_label(const char *fmt, ...)
@@ -1011,19 +1095,66 @@ bool ui_button(const char *label)
 
 bool ui_text(const char *label, char *out_text, size_t out_text_length)
 {
-	UIElement *e = ui_new_element_(k_EUIElementTypeText);
+	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
+	e->u.input.input_type = k_EUIInputElementTypeText;
 	snprintf(e->label, sizeof(e->label), "%s", label);
-	e->u.text.out_string = out_text;
-	e->u.text.out_string_length = out_text_length;
+	e->u.input.out_value = out_text;
+	e->u.input.out_value_length = out_text_length;
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
 	e->style.width = 100.f;
 	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
-	if(ui_ctx.active_text_input == out_text)
+	if(ui_ctx.text_input_changed && ui_ctx.input_element.out_value == out_text)
 	{
-		return ui_ctx.text_input_changed;
+		ui_clear_input();
+		return true;
+	}
+	return false;
+}
+
+//TODO: set ui_ctx.input_filter to only accept integer values
+
+bool ui_integer(const char *label, int *out_integer)
+{
+	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
+	e->u.input.input_type = k_EUIInputElementTypeInteger;
+	snprintf(e->label, sizeof(e->label), "%s", label);
+	e->u.input.out_value = out_integer;
+	e->u.input.out_value_length = sizeof(int);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	ui_element_style_(e, style);
+	e->style.width = 100.f;
+	ui_element_bounds_(e);
+
+	ui_element_layout_next_(e);
+	if(ui_ctx.text_input_changed && ui_ctx.input_element.out_value == out_integer)
+	{
+		*out_integer = atoi(ui_ctx.active_text_input);
+		ui_clear_input();
+		return true;
+	}
+	return false;
+}
+bool ui_float(const char *label, float *out_number)
+{
+	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
+	e->u.input.input_type = k_EUIInputElementTypeFloat;
+	snprintf(e->label, sizeof(e->label), "%s", label);
+	e->u.input.out_value = out_number;
+	e->u.input.out_value_length = sizeof(int);
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	ui_element_style_(e, style);
+	e->style.width = 100.f;
+	ui_element_bounds_(e);
+
+	ui_element_layout_next_(e);
+	if(ui_ctx.text_input_changed && ui_ctx.input_element.out_value == out_number)
+	{
+		*out_number = atof(ui_ctx.active_text_input);
+		ui_clear_input();
+		return true;
 	}
 	return false;
 }
