@@ -14,32 +14,6 @@
 #include <stb_truetype.h>
 #include <SDL.h>
 
-typedef struct
-{
-	float border_thickness;
-	float border_color[4];
-	float margin;
-	float width;
-	float height;
-	float max_width;
-	float max_height;
-	float padding_x;
-	float padding_y;
-	float background_color[4];
-	float text_color[4];
-	//float text_color_hover[4];
-	//float background_color_hover[4];
-} UIStyleProps;
-
-typedef struct
-{
-	//UIStyleProps selectors[...];
-	UIStyleProps initial; // Default
-	UIStyleProps hovered;
-	UIStyleProps active;
-	UIStyleProps focused;
-} UIStyle;
-
 enum
 {
 	k_EUIStyleSelectorDefault,
@@ -135,6 +109,7 @@ typedef struct
 typedef struct
 {
 	float x, y;
+	UIRectangle prev_rect;
 	UIFont *default_font;
 	GLuint gl_program;
 	UIElement *elements;
@@ -156,7 +131,6 @@ typedef struct
 	int selection_beg, selection_end;
 	int caret_pos;
 	bool sameline;
-	UIElement *last_element;
 } UIContext;
 static UIContext ui_ctx;
 
@@ -235,12 +209,16 @@ void ui_font_measure_text(UIFont *font, const char *beg, const char *end, float 
 	#endif
 
 	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
-	#if 0
+	#if 1
 	int ascent, descent, lineGap;
 	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &lineGap);
 	if(height)
 	{
-		*height = (ascent - descent + lineGap) * scale;
+		float h = (ascent - descent + lineGap) * scale;
+		if(*height == 0.f || h > *height)
+		{
+			*height = h;
+		}
 	}
 	#endif
 	float x, y;
@@ -273,7 +251,7 @@ void ui_font_measure_text(UIFont *font, const char *beg, const char *end, float 
 			{
 				*width += (q.x1 - q.x0);
 			}
-#endif
+			// Unreliable
 			if(height)
 			{
 				float h = (q.y1 - q.y0);
@@ -282,6 +260,7 @@ void ui_font_measure_text(UIFont *font, const char *beg, const char *end, float 
 					*height = h;
 				}
 			}
+#endif
 		}
 		++beg;
 	}
@@ -299,7 +278,6 @@ static UIElement *ui_new_element_(k_EUIElementType type)
 	UIElement *e = &ui_ctx.elements[ui_ctx.numelements++];
 	void ui_element_layout_prev_(UIElement *);
 	ui_element_layout_prev_(e);
-	ui_ctx.last_element = e;
 	memset(e, 0, sizeof(UIElement));
 	e->type = type;
 	e->index = ui_ctx.numelements - 1;
@@ -482,7 +460,7 @@ bool ui_init(int width, int height)
 	text_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
 
 	memset(&ui_ctx, 0, sizeof(UIContext));
-	ui_ctx.default_font = ui_load_font("C:/Windows/Fonts/arial.ttf", ui_ctx.default_font);
+	ui_ctx.default_font = ui_load_font("C:/Windows/Fonts/arial.ttf");
 	GLuint create_program(const char *path, const char *vs_source, const char *fs_source);
 	ui_ctx.gl_program = create_program("#ui", vertex_shader_source, fragment_shader_source);
 	ui_ctx.width = width;
@@ -568,7 +546,25 @@ typedef struct
 static GLuint ui_vao = 0, ui_vbo = 0;
 
 //TODO: text overflow?
+bool ui_render_char_(UIFont *font, int ch, float *x, float *y, float x_max, bool allow_overflow)
+{
+	stbtt_aligned_quad q;
+	stbtt_GetBakedQuad(font->cdata, 512, 512, ch, x, y, &q, 1); // 1=opengl & d3d10+,0=d3d9
+	if(x_max > 0.f && *x >= x_max && !allow_overflow)
+	{
+		return false;
+	}
+	UIGLVertex vertices[] = { { q.x0, q.y0, q.s0, q.t0 }, { q.x1, q.y0, q.s1, q.t0 }, { q.x0, q.y1, q.s0, q.t1 },
 
+							  { q.x1, q.y0, q.s1, q.t0 }, { q.x1, q.y1, q.s1, q.t1 }, { q.x0, q.y1, q.s0, q.t1 } };
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+	glDrawArrays(GL_TRIANGLES, 0, 6);
+	// https://stackoverflow.com/questions/50185488/why-can-i-use-gl-quads-with-gldrawarrays
+	// GL_INVALID_ENUM, newer OpenGL API doesn't support GL_QUADS anymore.
+	// glDrawArrays(GL_QUADS, 0, 4);
+	return true;
+}
 bool ui_render_text_(UIFont *font, float *x, float *y, float x_max, const char *text, float *textcolor)
 {
 	glBindTexture(GL_TEXTURE_2D, font->gl_texture);
@@ -579,7 +575,7 @@ bool ui_render_text_(UIFont *font, float *x, float *y, float x_max, const char *
 	mat4x4_identity(proj);
 	mat4x4_ortho(proj, 0.f, (float)ui_ctx.width, (float)ui_ctx.height, 0.f, -(1 << 16), (1 << 16));
 	//mat4x4_ortho(proj, -aspect, aspect, -1.f, 1.f, 1.f, -1.f);
-	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "projection"), 1, GL_FALSE, proj);
+	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "projection"), 1, GL_FALSE, &proj[0][0]);
 
 	mat4x4 identity;
 	mat4x4_identity(identity);
@@ -596,34 +592,23 @@ bool ui_render_text_(UIFont *font, float *x, float *y, float x_max, const char *
 	#endif
 
 
-	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "model"), 1, GL_FALSE, identity);
+	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "model"), 1, GL_FALSE, &identity[0][0]);
 	glUniform4fv(glGetUniformLocation(ui_ctx.gl_program, "textColor"), 1, textcolor);
 	float w = (float)ui_ctx.width;
 	float h = (float)ui_ctx.height;
 	bool overflow = false;
+	size_t n = 0;
 	while(*text)
 	{
 		if(*text >= 32 && *text < 128)
 		{
-			stbtt_aligned_quad q;
-			stbtt_GetBakedQuad(font->cdata, 512, 512, *text - 32, x, y, &q, 1); // 1=opengl & d3d10+,0=d3d9
-			if(x_max > 0.f && *x >= x_max)
+			if(!ui_render_char_(font, *text - 32, x, y, x_max, n == 0)) //TODO: FIXME atm first character always renders
 			{
 				overflow = true;
 				break;
 			}
-			UIGLVertex vertices[] = { { q.x0, q.y0, q.s0, q.t0 }, { q.x1, q.y0, q.s1, q.t0 },
-									  { q.x0, q.y1, q.s0, q.t1 },
-
-									  { q.x1, q.y0, q.s1, q.t0 }, { q.x1, q.y1, q.s1, q.t1 },
-									  { q.x0, q.y1, q.s0, q.t1 } };
-			glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-			glDrawArrays(GL_TRIANGLES, 0, 6);
-			// https://stackoverflow.com/questions/50185488/why-can-i-use-gl-quads-with-gldrawarrays
-			// GL_INVALID_ENUM, newer OpenGL API doesn't support GL_QUADS anymore.
-			// glDrawArrays(GL_QUADS, 0, 4);
 		}
+		++n;
 		++text;
 	}
 
@@ -649,7 +634,7 @@ bool ui_mouse_test_rectangle(UIRectangle *rect)
 		   && (ui_ctx.mouse.y >= rect->y && ui_ctx.mouse.y <= rect->y + rect->h);
 }
 
-void ui_render_quad_(float x, float y, float width, float height, float *bgcolor)
+void ui_render_quad_(float x, float y, float width, float height, const float *bgcolor)
 {
 	glBindTexture(GL_TEXTURE_2D, ui_ctx.white_texture);
 
@@ -659,7 +644,7 @@ void ui_render_quad_(float x, float y, float width, float height, float *bgcolor
 	mat4x4_identity(proj);
 	mat4x4_ortho(proj, 0.f, (float)ui_ctx.width, (float)ui_ctx.height, 0.f, -(1 << 16), (1 << 16));
 	// mat4x4_ortho(proj, -aspect, aspect, -1.f, 1.f, 1.f, -1.f);
-	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "projection"), 1, GL_FALSE, proj);
+	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "projection"), 1, GL_FALSE, &proj[0][0]);
 
 	mat4x4 identity;
 	mat4x4_identity(identity);
@@ -675,7 +660,7 @@ void ui_render_quad_(float x, float y, float width, float height, float *bgcolor
 	mat4x4_mul(model, translation, scale);
 #endif
 
-	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "model"), 1, GL_FALSE, model);
+	glUniformMatrix4fv(glGetUniformLocation(ui_ctx.gl_program, "model"), 1, GL_FALSE, &model[0][0]);
 	glUniform4fv(glGetUniformLocation(ui_ctx.gl_program, "textColor"), 1, bgcolor);
 	float w = (float)ui_ctx.width;
 	float h = (float)ui_ctx.height;
@@ -842,6 +827,7 @@ void ui_begin_frame()
 	ui_ctx.x = 0;
 	ui_ctx.y = 0;
 	ui_ctx.numelements = 0;
+	ui_ctx.sameline = false;
 }
 void ui_end_frame()
 {
@@ -1019,16 +1005,33 @@ void ui_element_layout_prev_(UIElement *e)
 {
 	if(ui_ctx.sameline)
 	{
-		assert(ui_ctx.last_element);
 		// Undo previous layout of last_element
-		ui_ctx.y -= ui_ctx.last_element->rect.h;
-		ui_ctx.x += e->rect.w;
+		ui_ctx.y = ui_ctx.prev_rect.y;
+		ui_ctx.x += ui_ctx.prev_rect.w;
 		ui_ctx.sameline = false;
 	}
 }
 void ui_element_layout_next_(UIElement *e)
 {
+	ui_ctx.prev_rect = e->rect;
 	ui_ctx.y += e->rect.h;
+}
+
+bool ui_element_input_focused(UIElement *e)
+{
+	return ui_ctx.input_element.input_type != k_EUIInputElementTypeInvalid && ui_ctx.input_element.out_value
+		   == e->u.input.out_value;
+}
+void ui_save_transform(UITransform *transform)
+{
+	transform->translation[0] = ui_ctx.x;
+	transform->translation[1] = ui_ctx.y;
+}
+
+void ui_restore_transform(UITransform *transform)
+{
+	ui_ctx.x = transform->translation[0];
+	ui_ctx.y = transform->translation[1];
 }
 
 void ui_element_style_(UIElement *e, UIStyle *style)
@@ -1043,7 +1046,7 @@ void ui_element_style_(UIElement *e, UIStyle *style)
 	}
 	if(e->type == k_EUIElementTypeInput)
 	{
-		if(ui_ctx.input_element.out_value == e->u.input.out_value)
+		if(ui_element_input_focused(e))
 		{
 			e->style = style->focused;
 			ui_element_bounds_(e);
@@ -1077,10 +1080,10 @@ void ui_label(const char *fmt, ...)
 	ui_element_style_(e, style);
 
 	ui_element_layout_next_(e);
-	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
+	//return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
 }
 
-bool ui_button(const char *label)
+bool ui_button_ex(const char *label, UIVec2 size)
 {
 	//TODO: store label in hashmap
 	//TODO: check previous frame input state for this element and return true if it was pressed
@@ -1093,7 +1096,7 @@ bool ui_button(const char *label)
 	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
 }
 
-bool ui_text(const char *label, char *out_text, size_t out_text_length)
+bool ui_text_ex(const char *label, char *out_text, size_t out_text_length, UIVec2 size)
 {
 	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
 	e->u.input.input_type = k_EUIInputElementTypeText;
@@ -1102,7 +1105,10 @@ bool ui_text(const char *label, char *out_text, size_t out_text_length)
 	e->u.input.out_value_length = out_text_length;
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
-	e->style.width = 100.f;
+	if(size.x > 0.f)
+	{
+		e->style.width = size.x;
+	}
 	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
@@ -1116,7 +1122,7 @@ bool ui_text(const char *label, char *out_text, size_t out_text_length)
 
 //TODO: set ui_ctx.input_filter to only accept integer values
 
-bool ui_integer(const char *label, int *out_integer)
+bool ui_integer_ex(const char *label, int *out_integer, UIVec2 size)
 {
 	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
 	e->u.input.input_type = k_EUIInputElementTypeInteger;
@@ -1125,7 +1131,10 @@ bool ui_integer(const char *label, int *out_integer)
 	e->u.input.out_value_length = sizeof(int);
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
-	e->style.width = 100.f;
+	if(size.x > 0.f)
+	{
+		e->style.width = size.x;
+	}
 	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
@@ -1137,7 +1146,7 @@ bool ui_integer(const char *label, int *out_integer)
 	}
 	return false;
 }
-bool ui_float(const char *label, float *out_number)
+bool ui_float_ex(const char *label, float *out_number, UIVec2 size)
 {
 	UIElement *e = ui_new_element_(k_EUIElementTypeInput);
 	e->u.input.input_type = k_EUIInputElementTypeFloat;
@@ -1146,20 +1155,23 @@ bool ui_float(const char *label, float *out_number)
 	e->u.input.out_value_length = sizeof(int);
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
-	e->style.width = 100.f;
+	if(size.x > 0.f)
+	{
+		e->style.width = size.x;
+	}
 	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
 	if(ui_ctx.text_input_changed && ui_ctx.input_element.out_value == out_number)
 	{
-		*out_number = atof(ui_ctx.active_text_input);
+		*out_number = (float)atof(ui_ctx.active_text_input);
 		ui_clear_input();
 		return true;
 	}
 	return false;
 }
 
-bool ui_checkbox(const char *label, bool *out_cond)
+bool ui_checkbox_ex(const char *label, bool *out_cond, UIVec2 size)
 {
 	UIElement *e = ui_new_element_(k_EUIElementTypeCheckbox);
 	snprintf(e->label, sizeof(e->label), "%s", label);
