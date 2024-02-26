@@ -78,3 +78,6 @@ static bool ui_float(const char *label, float *out_value)
 {
 	return ui_float_ex(label, out_value, (UIVec2) { 0.f, 0.f });
 }
+bool ui_image(unsigned int image_id, UIVec2 size);
+unsigned int ui_load_image(const char *path);
+bool ui_image_from_path(const char *path, unsigned int *image_id, UIVec2 size);

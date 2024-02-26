@@ -12,7 +12,10 @@
 #include "util.h"
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb_truetype.h>
+#include <stb_image.h>
 #include <SDL.h>
+
+static const float ui_color_white[] = { 1.f, 1.f, 1.f, 1.f };
 
 enum
 {
@@ -39,6 +42,11 @@ typedef struct
 
 typedef struct
 {
+	unsigned int image_id;
+} UIImageElement;
+
+typedef struct
+{
 	bool *state;
 } UICheckboxElement;
 
@@ -60,12 +68,6 @@ typedef struct
 	size_t out_value_length;
 } UIInputElement;
 
-typedef struct
-{
-	bool is_integer;
-	void *out_value;
-} UINumericInputElement;
-
 typedef enum
 {
 	k_EUIElementTypeNone,
@@ -73,6 +75,7 @@ typedef enum
 	k_EUIElementTypeCheckbox,
 	k_EUIElementTypeLabel,
 	k_EUIElementTypeInput,
+	k_EUIElementTypeImage,
 	k_EUIElementTypePane,
 	k_EUIElementTypeFrame,
 	k_EUIElementTypeMax
@@ -94,6 +97,7 @@ typedef struct
 		UIButtonElement button;
 		UIInputElement input;
 		UICheckboxElement checkbox;
+		UIImageElement image;
 	} u;
 	UIRectangle rect;
 	UIStyleProps style;
@@ -109,7 +113,6 @@ typedef struct
 typedef struct
 {
 	float x, y;
-	UIRectangle prev_rect;
 	UIFont *default_font;
 	GLuint gl_program;
 	UIElement *elements;
@@ -117,6 +120,7 @@ typedef struct
 	size_t maxelements;
 	int width, height;
 	GLuint white_texture;
+	GLuint default_image;
 	UIMouseState mouse, mouse_prev_frame;
 	bool scan_code_state[SDL_NUM_SCANCODES];
 	bool interact_active;
@@ -131,6 +135,7 @@ typedef struct
 	int selection_beg, selection_end;
 	int caret_pos;
 	bool sameline;
+	int sameline_count;
 } UIContext;
 static UIContext ui_ctx;
 
@@ -150,8 +155,8 @@ in vec2 v_texCoord;\n\
 uniform sampler2D s_texture;\n\
 uniform vec4 textColor;\n\
 void main() {\n\
-    float alpha = texture2D(s_texture, v_texCoord).r;\n\
-    gl_FragColor = textColor * alpha;\n\
+    vec4 color = texture2D(s_texture, v_texCoord);\n\
+    gl_FragColor = textColor * color;\n\
 }";
 
 //#define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -173,10 +178,19 @@ UIFont *ui_load_font(const char *path)
 	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &line_gap);
 	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
 	font->height = (ascent - descent + line_gap) * scale;
-
 	unsigned char image[512 * 512];
 	stbtt_BakeFontBitmap(font->ttf_buffer, 0, font->font_size, image, 512, 512, 32, 96, font->cdata); // no guarantee this fits!
 
+	char *tmp = malloc(512 * 512 * 4);
+	memset(tmp, 255, 512 * 512 * 4);
+	for(int x = 0; x < 512; ++x)
+	{
+		for(int y = 0; y < 512; ++y)
+		{
+			int index = (y * 512 + x) * 4;
+			tmp[index + 3] = image[y * 512 + x];
+		}
+	}
 	#if 0
 	if(!stbi_write_png("bitmap_font.png", 512, 512, 1, image, 0))
 	{
@@ -185,7 +199,8 @@ UIFont *ui_load_font(const char *path)
 	#endif
 	glGenTextures(1, &font->gl_texture);
 	glBindTexture(GL_TEXTURE_2D, font->gl_texture);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 512, 512, 0, GL_RED, GL_UNSIGNED_BYTE, image);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 512, 512, 0, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
+	free(tmp);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -194,6 +209,38 @@ UIFont *ui_load_font(const char *path)
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
 	return font;
+}
+unsigned int ui_load_image(const char *path)
+{
+	int width, height, channels;
+	unsigned char *image = stbi_load(path, &width, &height, &channels, STBI_rgb_alpha);
+	if(!image)
+	{
+		return ui_ctx.default_image;
+	}
+	GLenum format = GL_INVALID_ENUM;
+	switch(channels)
+	{
+		case 1: format = GL_RED;
+		case 3: format = GL_RGB;
+		case 4: format = GL_RGBA;
+	}
+	if(format == GL_INVALID_ENUM)
+	{
+		return ui_ctx.default_image;
+	}
+	unsigned int image_id;
+	glGenTextures(1, &image_id);
+	glBindTexture(GL_TEXTURE_2D, image_id);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, format, GL_UNSIGNED_BYTE, image);
+	stbi_image_free(image);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+	return image_id;
 }
 void ui_font_measure_text(UIFont *font, const char *beg, const char *end, float *width, float *height)
 {
@@ -276,13 +323,14 @@ static UIElement *ui_new_element_(k_EUIElementType type)
 		ui_ctx.maxelements = n;
 	}
 	UIElement *e = &ui_ctx.elements[ui_ctx.numelements++];
-	void ui_element_layout_prev_(UIElement *);
-	ui_element_layout_prev_(e);
 	memset(e, 0, sizeof(UIElement));
 	e->type = type;
 	e->index = ui_ctx.numelements - 1;
 	//e->x = ui_ctx.x;
 	//e->y = ui_ctx.y;
+
+	void ui_element_layout_prev_();
+	ui_element_layout_prev_();
 	return e;
 }
 
@@ -465,10 +513,26 @@ bool ui_init(int width, int height)
 	ui_ctx.gl_program = create_program("#ui", vertex_shader_source, fragment_shader_source);
 	ui_ctx.width = width;
 	ui_ctx.height = height;
+	glGenTextures(1, &ui_ctx.default_image);
+	glBindTexture(GL_TEXTURE_2D, ui_ctx.default_image);
+	static const unsigned char default_image_data[] = {
+		255, 0, 0, 255,
+		255, 255, 255, 255,
+		255, 255, 255, 255,
+		255, 0, 0, 255
+	};
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, default_image_data);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
 	glGenTextures(1, &ui_ctx.white_texture);
 	glBindTexture(GL_TEXTURE_2D, ui_ctx.white_texture);
-	static const unsigned char image[] = { 255, 255, 255, 255, 255, 255 };
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, 2, 2, 0, GL_RED, GL_UNSIGNED_BYTE, image);
+	static const unsigned char image[] = { 255, 255, 255, 255 };
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
 
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -602,7 +666,8 @@ bool ui_render_text_(UIFont *font, float *x, float *y, float x_max, const char *
 	{
 		if(*text >= 32 && *text < 128)
 		{
-			if(!ui_render_char_(font, *text - 32, x, y, x_max, n == 0)) //TODO: FIXME atm first character always renders
+			//if(!ui_render_char_(font, *text - 32, x, y, x_max, n == 0)) //TODO: FIXME atm first character always renders
+			if(!ui_render_char_(font, *text - 32, x, y, x_max, true)) //TODO: FIXME atm first character always renders
 			{
 				overflow = true;
 				break;
@@ -634,9 +699,13 @@ bool ui_mouse_test_rectangle(UIRectangle *rect)
 		   && (ui_ctx.mouse.y >= rect->y && ui_ctx.mouse.y <= rect->y + rect->h);
 }
 
-void ui_render_quad_(float x, float y, float width, float height, const float *bgcolor)
+void ui_render_quad_(float x, float y, float width, float height, const float *bgcolor, unsigned int image_id)
 {
-	glBindTexture(GL_TEXTURE_2D, ui_ctx.white_texture);
+	if(image_id == 0)
+	{
+		image_id = ui_ctx.white_texture;
+	}
+	glBindTexture(GL_TEXTURE_2D, image_id);
 
 	mat4x4 proj;
 	float aspect = (float)ui_ctx.width / (float)ui_ctx.height;
@@ -725,13 +794,14 @@ void ui_render_element_(UIElement *e)
 	float h = e->rect.h;
 	float content_x = x + props->border_thickness + props->padding_x / 2.f + props->margin / 2.f;
 	float content_y = y + props->border_thickness + props->padding_y / 2.f + props->margin / 2.f;
-	ui_render_quad_(x, y, w, h, props->border_color);
+	ui_render_quad_(x, y, w, h, props->border_color, 0);
 
 	ui_render_quad_(x + props->border_thickness,
 					y + props->border_thickness,
 					w - 2.0f * props->border_thickness,
 					h - 2.0f * props->border_thickness,
-					props->background_color);
+					props->background_color,
+					0);
 
 	switch(e->type)
 	{
@@ -739,6 +809,9 @@ void ui_render_element_(UIElement *e)
 		case k_EUIElementTypeLabel:
 			content_y += e->content_height;
 			ui_render_text_(font, &content_x, &content_y, 0.f, e->label, props->text_color);
+			break;
+		case k_EUIElementTypeImage:
+			ui_render_quad_(x, y, w, h, ui_color_white, e->u.image.image_id);
 			break;
 		case k_EUIElementTypeInput:
 		{
@@ -792,7 +865,7 @@ void ui_render_element_(UIElement *e)
 										 &selx,
 										 &sely);
 					static const float selcol[] = { 0.f, 0.f, 1.f, 0.5f };
-					ui_render_quad_(value_x, value_y, selx, e->content_height, selcol);
+					ui_render_quad_(value_x, value_y, selx, e->content_height, selcol, 0);
 
 				}
 			}
@@ -807,15 +880,15 @@ void ui_render_element_(UIElement *e)
 			float sz = e->content_height;
 			ui_render_quad_(content_x,
 							content_y - sz,
-							sz,
-							sz, color);
+							sz, sz, color, 0);
 			if(!*e->u.checkbox.state)
 			{
 				ui_render_quad_(content_x + sz / 4.f,
 								content_y - e->content_height + sz / 4.f,
 								sz / 2.f,
 								sz / 2.f,
-								color2);
+								color2,
+								0);
 			}
 		} break;
 	}
@@ -828,6 +901,7 @@ void ui_begin_frame()
 	ui_ctx.y = 0;
 	ui_ctx.numelements = 0;
 	ui_ctx.sameline = false;
+	ui_ctx.sameline_count = 0;
 }
 void ui_end_frame()
 {
@@ -1001,19 +1075,31 @@ void ui_element_bounds_(UIElement *e)
 	e->rect.h = props->border_thickness * 2.f + props->padding_y + props->margin + props->height;
 }
 
-void ui_element_layout_prev_(UIElement *e)
+UIElement *ui_prev_element_()
+{
+	return ui_ctx.numelements <= 1 ? NULL : &ui_ctx.elements[ui_ctx.numelements - 2];
+}
+
+void ui_element_layout_prev_()
 {
 	if(ui_ctx.sameline)
 	{
-		// Undo previous layout of last_element
-		ui_ctx.y = ui_ctx.prev_rect.y;
-		ui_ctx.x += ui_ctx.prev_rect.w;
+		UIElement *prev = ui_prev_element_();
+		assert(prev);
+		ui_ctx.y = prev->rect.y;
+		ui_ctx.x += prev->rect.w;
+
 		ui_ctx.sameline = false;
+	}
+	else if(ui_ctx.sameline_count > 0)
+	{
+		UIElement *prev = &ui_ctx.elements[ui_ctx.numelements - 2 - ui_ctx.sameline_count];
+		ui_ctx.x = prev->rect.x;
+		ui_ctx.sameline_count = 0;
 	}
 }
 void ui_element_layout_next_(UIElement *e)
 {
-	ui_ctx.prev_rect = e->rect;
 	ui_ctx.y += e->rect.h;
 }
 
@@ -1091,6 +1177,11 @@ bool ui_button_ex(const char *label, UIVec2 size)
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
+	if(size.x > 0.f)
+	{
+		e->style.width = size.x;
+	}
+	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
 	return ui_clicked() && ui_mouse_test_rectangle(&e->rect);
@@ -1118,6 +1209,30 @@ bool ui_text_ex(const char *label, char *out_text, size_t out_text_length, UIVec
 		return true;
 	}
 	return false;
+}
+
+bool ui_image(unsigned int image_id, UIVec2 size)
+{
+	UIElement *e = ui_new_element_(k_EUIElementTypeImage);
+	e->u.image.image_id = image_id;
+	e->label[0] = 0;
+	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorDefault];
+	ui_element_style_(e, style);
+	e->style.width = size.x;
+	e->style.height = size.y;
+	ui_element_bounds_(e);
+
+	ui_element_layout_next_(e);
+	return false;
+}
+
+bool ui_image_from_path(const char *path, unsigned int *image_id, UIVec2 size)
+{
+	if(*image_id == 0)
+	{
+		*image_id = ui_load_image(path);
+	}
+	return ui_image(*image_id, size);
 }
 
 //TODO: set ui_ctx.input_filter to only accept integer values
@@ -1178,6 +1293,11 @@ bool ui_checkbox_ex(const char *label, bool *out_cond, UIVec2 size)
 	e->u.checkbox.state = out_cond;
 	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
 	ui_element_style_(e, style);
+	if(size.x > 0.f)
+	{
+		e->style.width = size.x;
+	}
+	ui_element_bounds_(e);
 
 	ui_element_layout_next_(e);
 	bool pressed = ui_clicked() && ui_mouse_test_rectangle(&e->rect);
@@ -1191,4 +1311,5 @@ bool ui_checkbox_ex(const char *label, bool *out_cond, UIVec2 size)
 void ui_sameline()
 {
 	ui_ctx.sameline = true;
+	ui_ctx.sameline_count++;
 }
