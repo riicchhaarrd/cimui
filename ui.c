@@ -136,6 +136,8 @@ typedef struct
 	int caret_pos;
 	bool sameline;
 	int sameline_count;
+	UIStyle *style;
+	UIStyle custom_style;
 } UIContext;
 static UIContext ui_ctx;
 
@@ -600,6 +602,28 @@ bool ui_init(int width, int height)
 	}
 
 	return true;
+}
+
+void ui_inherit_style(int style, UIStyle *out_style)
+{
+	*out_style = ui_ctx.styles[style];
+}
+void ui_default_style(UIStyle *out_style)
+{
+	*out_style = ui_ctx.styles[k_EUIStyleSelectorDefault];
+}
+void ui_save_style(UIStyle *style)
+{
+	//*style = ui_ctx.custom_style;
+	//ui_ctx.style = &ui_ctx.custom_style;
+	ui_ctx.custom_style = *style;
+	ui_ctx.style = style;
+}
+void ui_restore_style(UIStyle *style)
+{
+	//ui_ctx.custom_style = *style;
+	*style = ui_ctx.custom_style;
+	ui_ctx.style = NULL;
 }
 
 typedef struct
@@ -1103,6 +1127,11 @@ void ui_element_layout_next_(UIElement *e)
 	ui_ctx.y += e->rect.h;
 }
 
+void ui_style(UIStyle *style)
+{
+	ui_ctx.style = style;
+}
+
 bool ui_element_input_focused(UIElement *e)
 {
 	return ui_ctx.input_element.input_type != k_EUIInputElementTypeInvalid && ui_ctx.input_element.out_value
@@ -1150,6 +1179,14 @@ void ui_clear_input()
 	ui_ctx.text_input_changed = false;
 }
 
+UIStyle *ui_get_element_style_(int style)
+{
+	// Override default element style
+	if(ui_ctx.style)
+		return ui_ctx.style;
+	return &ui_ctx.styles[style];
+}
+
 void ui_label(const char *fmt, ...)
 {
 	char text[256] = { 0 };
@@ -1162,7 +1199,7 @@ void ui_label(const char *fmt, ...)
 	}
 	UIElement *e = ui_new_element_(k_EUIElementTypeLabel);
 	snprintf(e->label, sizeof(e->label), "%s", text);
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorDefault];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorDefault);
 	ui_element_style_(e, style);
 
 	ui_element_layout_next_(e);
@@ -1175,7 +1212,7 @@ bool ui_button_ex(const char *label, UIVec2 size)
 	//TODO: check previous frame input state for this element and return true if it was pressed
 	UIElement *e = ui_new_element_(k_EUIElementTypeButton);
 	snprintf(e->label, sizeof(e->label), "%s", label);
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorInput);
 	ui_element_style_(e, style);
 	if(size.x > 0.f)
 	{
@@ -1194,7 +1231,7 @@ bool ui_text_ex(const char *label, char *out_text, size_t out_text_length, UIVec
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.input.out_value = out_text;
 	e->u.input.out_value_length = out_text_length;
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorInput);
 	ui_element_style_(e, style);
 	if(size.x > 0.f)
 	{
@@ -1216,7 +1253,7 @@ bool ui_image(unsigned int image_id, UIVec2 size)
 	UIElement *e = ui_new_element_(k_EUIElementTypeImage);
 	e->u.image.image_id = image_id;
 	e->label[0] = 0;
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorDefault];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorDefault);
 	ui_element_style_(e, style);
 	e->style.width = size.x;
 	e->style.height = size.y;
@@ -1244,7 +1281,7 @@ bool ui_integer_ex(const char *label, int *out_integer, UIVec2 size)
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.input.out_value = out_integer;
 	e->u.input.out_value_length = sizeof(int);
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorInput);
 	ui_element_style_(e, style);
 	if(size.x > 0.f)
 	{
@@ -1268,7 +1305,7 @@ bool ui_float_ex(const char *label, float *out_number, UIVec2 size)
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.input.out_value = out_number;
 	e->u.input.out_value_length = sizeof(int);
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorInput);
 	ui_element_style_(e, style);
 	if(size.x > 0.f)
 	{
@@ -1291,7 +1328,7 @@ bool ui_checkbox_ex(const char *label, bool *out_cond, UIVec2 size)
 	UIElement *e = ui_new_element_(k_EUIElementTypeCheckbox);
 	snprintf(e->label, sizeof(e->label), "%s", label);
 	e->u.checkbox.state = out_cond;
-	UIStyle *style = &ui_ctx.styles[k_EUIStyleSelectorInput];
+	UIStyle *style = ui_get_element_style_(k_EUIStyleSelectorInput);
 	ui_element_style_(e, style);
 	if(size.x > 0.f)
 	{
