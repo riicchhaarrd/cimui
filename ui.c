@@ -980,7 +980,7 @@ void ui_render()
 			if(ui_clicked())
 			{
 				active_element = e;
-				if(e->type = k_EUIElementTypeInput)
+				if(e->type == k_EUIElementTypeInput)
 				{
 					if(e->u.input.input_type == k_EUIInputElementTypeText)
 					{
