@@ -157,7 +157,7 @@ in vec2 v_texCoord;\n\
 uniform sampler2D s_texture;\n\
 uniform vec4 textColor;\n\
 void main() {\n\
-    vec4 color = texture2D(s_texture, v_texCoord);\n\
+    vec4 color = texture(s_texture, v_texCoord);\n\
     gl_FragColor = textColor * color;\n\
 }";
 
@@ -180,7 +180,7 @@ UIFont *ui_load_font(const char *path)
 	stbtt_GetFontVMetrics(&font->font_info, &ascent, &descent, &line_gap);
 	float scale = stbtt_ScaleForPixelHeight(&font->font_info, font->font_size);
 	font->height = (ascent - descent + line_gap) * scale;
-	unsigned char image[512 * 512];
+	unsigned char image[512 * 512 * 4];
 	stbtt_BakeFontBitmap(font->ttf_buffer, 0, font->font_size, image, 512, 512, 32, 96, font->cdata); // no guarantee this fits!
 
 	char *tmp = malloc(512 * 512 * 4);
